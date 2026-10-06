@@ -14,7 +14,8 @@ const FP = {
     sessions: [],
     mission: null,
     gameScores: { snake: 0, tetris: 0 },
-    pins: []
+    pins: [],
+    mixer: { master: 0.7, levels: { rain: 0, waves: 0, wind: 0, fire: 0, brown: 0, white: 0 } }
   },
 
   async get(keys = null) {

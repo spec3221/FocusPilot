@@ -160,3 +160,8 @@ kbd{padding:3px 7px;border:1px solid var(--border);border-radius:6px;background:
 .pin:hover .pin-del,.pin-del:focus{opacity:1}
 @media(max-width:800px){.pins-card{grid-column:auto}}
 .pin-ico img[hidden],.pin-ico b[hidden]{display:none}
+.mixer{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px 22px}
+.mixer-row{display:grid;grid-template-columns:128px 1fr;align-items:center;gap:10px;font-size:14px}
+.mixer-row span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mixer-row input[type=range],.mixer-row input[type=range]:focus{padding:0;border:0;background:none;accent-color:var(--accent);height:20px;width:100%}
+.mixer-master{margin-top:14px;padding-top:12px;border-top:1px solid var(--border)}

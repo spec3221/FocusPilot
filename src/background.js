@@ -118,8 +118,78 @@ async function capturePage(tab) {
   return {ok:true};
 }
 
+
+// ---------- Микшер звуков (аудио живёт в offscreen-документе) ----------
+const MIXER_KEYS = ["rain", "waves", "wind", "fire", "brown", "white"];
+
+function sanitizeMixer(m) {
+  const out = { master: 0.7, levels: {} };
+  const mm = Number(m?.master);
+  if (Number.isFinite(mm)) out.master = Math.min(1, Math.max(0, mm));
+  for (const k of MIXER_KEYS) {
+    const v = Number(m?.levels?.[k]);
+    out.levels[k] = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+  }
+  return out;
+}
+
+const mixerActive = m => m.master > 0 && MIXER_KEYS.some(k => m.levels[k] > 0);
+
+async function hasOffscreen() {
+  const ctxs = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  return ctxs.length > 0;
+}
+
+let offscreenCreating = null;
+async function ensureOffscreen() {
+  if (await hasOffscreen()) return;
+  if (!offscreenCreating) {
+    offscreenCreating = chrome.offscreen.createDocument({
+      url: "src/offscreen.html",
+      reasons: ["AUDIO_PLAYBACK"],
+      justification: "Воспроизведение фоновых звуков микшера"
+    }).finally(() => { offscreenCreating = null; });
+  }
+  await offscreenCreating;
+}
+
+async function applyMixer(m) {
+  try {
+    if (mixerActive(m)) {
+      await ensureOffscreen();
+      chrome.runtime.sendMessage({ target: "offscreen", type: "mixerApply", state: m }).catch(() => {});
+    } else if (await hasOffscreen()) {
+      chrome.runtime.sendMessage({ target: "offscreen", type: "mixerApply", state: m }).catch(() => {});
+      setTimeout(async () => {
+        const cur = sanitizeMixer((await FP.get(["mixer"])).mixer);
+        if (!mixerActive(cur) && await hasOffscreen()) chrome.offscreen.closeDocument().catch(() => {});
+      }, 900);
+    }
+  } catch (e) {
+    console.error("FocusPilot mixer error:", e);
+  }
+}
+
+// После перезапуска браузера звуки не должны включаться сами
+chrome.runtime.onStartup.addListener(async () => {
+  const m = sanitizeMixer((await FP.get(["mixer"])).mixer);
+  for (const k of MIXER_KEYS) m.levels[k] = 0;
+  await FP.set({ mixer: m });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.target === "offscreen") return false;
   (async () => {
+    if (msg.type === "mixerSet") {
+      const m = sanitizeMixer(msg.state);
+      await FP.set({ mixer: m });
+      await applyMixer(m);
+      return { ok: true };
+    }
+    if (msg.type === "mixerReady") {
+      const d = await FP.get(["mixer"]);
+      return { ok: true, state: sanitizeMixer(d.mixer) };
+    }
     if (msg.type === "openFocusPilot") {
       try {
         await chrome.tabs.create({url: chrome.runtime.getURL("src/newtab.html")});

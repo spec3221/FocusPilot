@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "FocusPilot",
-  "version": "3.12.1",
+  "version": "3.13.2",
   "description": "A focused productivity dashboard with tasks, notes, Pomodoro, reading list, statistics and URL blocking.",
   "permissions": [
     "storage",
     "tabs",
     "webNavigation",
     "alarms",
-    "favicon"
+    "favicon",
+    "offscreen"
   ],
   "action": {
     "default_title": "FocusPilot",

@@ -107,8 +107,20 @@ async function addBlock(){
   input.value=""; FPUI.toast("Блокировка добавлена"); render();
 }
 async function saveNote(){
-  const input=$("noteInput"), text=input.value.trim(); if(!text)return;
-  const d=await FP.get(["notes"]); d.notes.unshift({id:FP.uid("note"),text,time:Date.now()}); await FPUI.save({notes:d.notes}); input.value=""; render();
+  const input=$("noteInput"), text=input.value.trim();
+  if(!text){ FPUI.toast("Введите текст заметки","error"); return; }
+  try {
+    const d=await FP.get(["notes"]);
+    const notes=Array.isArray(d.notes)?d.notes:[];
+    notes.unshift({id:FP.uid("note"),text,time:Date.now()});
+    await FPUI.save({notes});
+    input.value="";
+    await render();
+    FPUI.toast("Заметка сохранена");
+  } catch (error) {
+    console.error("FocusPilot saveNote error:", error);
+    FPUI.toast("Не удалось сохранить заметку","error");
+  }
 }
 async function capture(){
   const tabs=await chrome.tabs.query({active:true,currentWindow:true});
@@ -596,15 +608,18 @@ document.addEventListener("DOMContentLoaded", async()=>{
     return;
   }
 
-  setupSearch();
-  setupPins();
-  setupNavigation();
-  setupSnake();
-  setupTetris();
-  initSnake();
+  const safe = (name, fn) => { try { const r = fn(); if (r && r.catch) r.catch(e => console.error("FocusPilot " + name + " error:", e)); } catch (e) { console.error("FocusPilot " + name + " error:", e); } };
+  safe("setupSearch", setupSearch);
+  safe("setupNavigation", setupNavigation);
+  safe("setupPins", setupPins);
+  safe("setupMixer", setupMixer);
+  safe("setupSnake", setupSnake);
+  safe("setupTetris", setupTetris);
+  safe("initSnake", initSnake);
   $("addTask").onclick=addTask; $("taskInput").addEventListener("keydown",e=>{if(e.key==="Enter")addTask()});
   $("addBlock").onclick=addBlock; $("blockInput").addEventListener("keydown",e=>{if(e.key==="Enter")addBlock()});
   $("saveNote").onclick=saveNote; $("capture").onclick=capture;
+  $("noteInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();saveNote();}});
   $("start").onclick=toggleTimer; $("reset").onclick=resetTimer;
   $("theme").onclick=async()=>{await FPUI.toggleTheme();};
   $("palette").onclick=openPalette;
@@ -758,4 +773,68 @@ function setupPins(){
   };
   $("pinSave").onclick = save;
   [$("pinUrl"), $("pinTitle")].forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") save(); }));
+}
+
+/* ---------- Микшер звуков ---------- */
+const MIXER_CHANNELS = [
+  ["rain", "🌧️", "Дождь"], ["waves", "🌊", "Волны"], ["wind", "💨", "Ветер"],
+  ["fire", "🔥", "Костёр"], ["brown", "🟤", "Глубокий шум"], ["white", "⚪", "Белый шум"]
+];
+let mixerState = { master: 0.7, levels: {} };
+let mixerSendTimer = null;
+
+function mixerNormalize(m) {
+  const out = { master: 0.7, levels: {} };
+  if (Number.isFinite(Number(m?.master))) out.master = Math.min(1, Math.max(0, Number(m.master)));
+  for (const [k] of MIXER_CHANNELS) {
+    const v = Number(m?.levels?.[k]);
+    out.levels[k] = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+  }
+  return out;
+}
+
+function mixerSend() {
+  clearTimeout(mixerSendTimer);
+  mixerSendTimer = setTimeout(() => {
+    chrome.runtime.sendMessage({ type: "mixerSet", state: mixerState }).catch(() => {});
+  }, 50);
+}
+
+function mixerPaint() {
+  document.querySelectorAll("#mixerOff, .mixer-card [data-mix]").forEach(el => {
+    if (el.dataset.mix === undefined || el === document.activeElement) return;
+    const key = el.dataset.mix;
+    el.value = Math.round((key === "master" ? mixerState.master : mixerState.levels[key] || 0) * 100);
+  });
+}
+
+async function setupMixer() {
+  const box = $("mixer");
+  if (!box) return;
+  const d = await FP.get(["mixer"]);
+  mixerState = mixerNormalize(d.mixer);
+  box.innerHTML = MIXER_CHANNELS.map(([k, icon, name]) =>
+    `<label class="mixer-row"><span>${icon} ${name}</span><input type="range" min="0" max="100" data-mix="${k}"></label>`).join("");
+  mixerPaint();
+
+  document.querySelector(".mixer-card").addEventListener("input", e => {
+    const key = e.target?.dataset?.mix;
+    if (!key) return;
+    const v = Number(e.target.value) / 100;
+    if (key === "master") mixerState.master = v; else mixerState.levels[key] = v;
+    mixerSend();
+  });
+
+  $("mixerOff").onclick = () => {
+    for (const [k] of MIXER_CHANNELS) mixerState.levels[k] = 0;
+    mixerPaint();
+    mixerSend();
+  };
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.mixer?.newValue) {
+      mixerState = mixerNormalize(changes.mixer.newValue);
+      mixerPaint();
+    }
+  });
 }

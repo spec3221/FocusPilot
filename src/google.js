@@ -66,13 +66,19 @@
       border-radius:10px; padding:9px 8px; cursor:pointer; font-size:11px; font-weight:700;
     }
     .action:hover { background:#19233a; border-color:rgba(124,92,255,.4); }
+    .mix-toggle { width:100%; margin-top:9px; }
+    .mixer { display:none; margin-top:9px; gap:7px; }
+    .mixer.open { display:grid; }
+    .mrow { display:grid; grid-template-columns:104px 1fr; align-items:center; gap:8px; font-size:11px; color:#dfe5f5; }
+    .mrow span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .mrow input[type=range] { width:100%; accent-color:#7c5cff; margin:0; }
+    .mixer .action { margin-top:2px; }
     .url { color:#66738d; font-size:9px; margin-top:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .toast {
-      position:fixed; right:0; top:calc(100% + 8px); padding:8px 10px; border-radius:9px;
-      background:#11192b; border:1px solid rgba(255,255,255,.1); color:#fff; font-size:11px;
-      opacity:0; transform:translateY(-5px); pointer-events:none; transition:.16s;
+      display:none; margin-top:9px; padding:8px 10px; border-radius:9px; text-align:center;
+      background:#11192b; border:1px solid rgba(124,92,255,.45); color:#fff; font-size:11px;
     }
-    .toast.show { opacity:1; transform:translateY(0); }
+    .toast.show { display:block; }
     @media (max-width: 900px) { .dock { top:72px; right:10px; } }
     @media (max-width: 650px) { .dock { width:270px; } }
   `;
@@ -104,6 +110,8 @@
         <button class="action" id="capture">🔖 Сохранить</button>
         <button class="action" id="newtab">✦ Новая вкладка</button>
       </div>
+      <button class="action mix-toggle" id="mixToggle">🎧 Микшер звуков</button>
+      <div class="mixer" id="mixer"></div>
       <div class="url" id="url"></div>
       <div class="toast" id="toast"></div>
     </div>
@@ -118,7 +126,7 @@
     t.textContent = text;
     t.classList.add("show");
     clearTimeout(showToast.timer);
-    showToast.timer = setTimeout(() => t.classList.remove("show"), 1800);
+    showToast.timer = setTimeout(() => t.classList.remove("show"), 2600);
   }
 
   async function loadStats() {
@@ -180,15 +188,80 @@
   };
 
   $("capture").onclick = async () => {
+    const btn = $("capture");
     try {
+      if (!chrome.runtime?.id) throw new Error("context invalidated");
       const response = await chrome.runtime.sendMessage({type:"capture"});
-      showToast(response?.ok === false ? "Не удалось сохранить" : "Страница сохранена ✓");
+      if (response?.ok === false) { showToast("Не удалось сохранить"); return; }
+      showToast("Страница сохранена в Read Later ✓");
+      btn.textContent = "✓ Сохранено";
+      setTimeout(() => { btn.textContent = "🔖 Сохранить"; }, 1500);
     } catch {
-      showToast("Не удалось сохранить страницу");
+      showToast("Расширение обновлено — перезагрузи страницу (F5)");
     }
   };
 
   $("url").textContent = location.hostname + location.pathname;
+
+
+  // --- Микшер звуков ---
+  const MIX = [
+    ["rain","🌧️","Дождь"],["waves","🌊","Волны"],["wind","💨","Ветер"],
+    ["fire","🔥","Костёр"],["brown","🟤","Глубокий шум"],["white","⚪","Белый шум"]
+  ];
+  let mixState = { master: 0.7, levels: {} };
+  let mixTimer = null;
+
+  function mixNormalize(m) {
+    const out = { master: 0.7, levels: {} };
+    if (Number.isFinite(Number(m?.master))) out.master = Math.min(1, Math.max(0, Number(m.master)));
+    for (const [k] of MIX) {
+      const v = Number(m?.levels?.[k]);
+      out.levels[k] = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+    }
+    return out;
+  }
+
+  function mixPaint() {
+    shadow.querySelectorAll("#mixer input[data-k]").forEach(el => {
+      if (el === shadow.activeElement) return;
+      const k = el.dataset.k;
+      el.value = Math.round((k === "master" ? mixState.master : mixState.levels[k] || 0) * 100);
+    });
+  }
+
+  function mixSend() {
+    clearTimeout(mixTimer);
+    mixTimer = setTimeout(() => {
+      chrome.runtime.sendMessage({type:"mixerSet", state: mixState}).catch(() => showToast("Не удалось включить звук"));
+    }, 50);
+  }
+
+  $("mixer").innerHTML =
+    MIX.map(([k, icon, name]) => `<label class="mrow"><span>${icon} ${name}</span><input type="range" min="0" max="100" data-k="${k}"></label>`).join("") +
+    `<label class="mrow"><span>🔊 Общая</span><input type="range" min="0" max="100" data-k="master"></label>` +
+    `<button class="action" id="mixOff">Выключить всё</button>`;
+
+  $("mixer").addEventListener("input", e => {
+    const k = e.target?.dataset?.k;
+    if (!k) return;
+    const v = Number(e.target.value) / 100;
+    if (k === "master") mixState.master = v; else mixState.levels[k] = v;
+    mixSend();
+  });
+  $("mixOff").onclick = () => {
+    for (const [k] of MIX) mixState.levels[k] = 0;
+    mixPaint();
+    mixSend();
+  };
+  $("mixToggle").onclick = () => $("mixer").classList.toggle("open");
+
+  try {
+    chrome.storage.local.get(["mixer"]).then(d => { mixState = mixNormalize(d.mixer); mixPaint(); });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes.mixer?.newValue) { mixState = mixNormalize(changes.mixer.newValue); mixPaint(); }
+    });
+  } catch {}
 
   // --- Draggable FocusPilot Dock ---
   const topBar = shadow.querySelector(".top");
